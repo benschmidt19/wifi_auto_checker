@@ -3,112 +3,104 @@ import subprocess
 import sys
 import time
 import logging
-import schedule as sc
+import schedule as scheduler
 
-# Constants
-LOG_FILE = "wifi_status_log.txt"       # Log file name
-PING_HOST = "www.google.com"           # Host to ping for connectivity check
+# Configuration
+LOG_FILENAME = "network_monitor_log.txt"
+TEST_DOMAIN = "www.google.com"
 
-# Try to create the log file if it doesn't already exist
+# Create log file if missing
 try:
-    with open(LOG_FILE, 'x') as file:
-        file.write("Logs:\n")
-    print(f"File '{LOG_FILE}' created successfully.")
+    with open(LOG_FILENAME, 'x') as log_file:
+        log_file.write("Network Log Initialized\n")
+    print(f"Created new log file: {LOG_FILENAME}")
 except FileExistsError:
-    print(f"File '{LOG_FILE}' already exists.")
+    print(f"Log file '{LOG_FILENAME}' already exists.")
 
-# Configure logging to write messages to the log file with timestamps
-logging.basicConfig(filename=LOG_FILE, 
-                    level=logging.INFO, 
-                    format='%(asctime)s - %(message)s', 
-                    filemode='a')  # Append mode
+# Set up logging
+logging.basicConfig(filename=LOG_FILENAME,
+                    level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s',
+                    filemode='a')
 
-# Function to enable WiFi using netsh command
-def enable():
+# Enable wireless network
+def turn_on_wifi():
     try:
-        subprocess.call("netsh interface set interface Wi-Fi enabled", shell=True)
-        print("Turning On the laptop WiFi")
-        logging.info("WiFi enabled")
-    except Exception as e:
-        print(f"Failed to enable WiFi: {e}")
-        logging.error(f"Failed to enable WiFi: {e}")
+        subprocess.call("netsh interface set interface name='Wi-Fi' admin=enabled", shell=True)
+        print("WiFi turned ON")
+        logging.info("WiFi turned ON")
+    except Exception as error:
+        print(f"Could not enable WiFi: {error}")
+        logging.error(f"WiFi enable failed: {error}")
 
-# Function to disable WiFi using netsh command
-def disable():
+# Disable wireless network
+def turn_off_wifi():
     try:
-        subprocess.call("netsh interface set interface Wi-Fi disabled", shell=True)
-        print("Turning Off the laptop WiFi")
-        logging.info("WiFi disabled")
-    except Exception as e:
-        print(f"Failed to disable WiFi: {e}")
-        logging.error(f"Failed to disable WiFi: {e}")
+        subprocess.call("netsh interface set interface name='Wi-Fi' admin=disabled", shell=True)
+        print("WiFi turned OFF")
+        logging.info("WiFi turned OFF")
+    except Exception as error:
+        print(f"Could not disable WiFi: {error}")
+        logging.error(f"WiFi disable failed: {error}")
 
-# Main job function to check WiFi and try reconnection if it's down
-def job():
+# Connectivity check and recovery routine
+def monitor_network():
     try:
-        # Ensure WiFi is enabled before checking connectivity
-        subprocess.call("netsh interface set interface Wi-Fi enabled", shell=True)
-        print("WiFi is enabled and connected to internet")
-        logging.info("WiFi is enabled and connected to the internet.")
-        
-        # Ping the host to check if the internet is reachable
-        response = subprocess.call(f"ping -n 1 {PING_HOST}", shell=True)
-        
-        if response == 1:
-            # If ping fails, start reconnection attempts
-            print("Your Connection is not working")
-            logging.warning("WiFi connection not working, ping failed.")
+        subprocess.call("netsh interface set interface name='Wi-Fi' admin=enabled", shell=True)
+        print("Checking internet access...")
+        logging.info("Checking internet connectivity")
 
-            attempt_counter = 0
-            max_attempts = 3  # Limit the number of reconnection tries
+        ping_result = subprocess.call(f"ping -n 1 {TEST_DOMAIN}", shell=True)
 
-            while attempt_counter < max_attempts:
-                print(f"Attempt {attempt_counter + 1} to reconnect...")
-                logging.info(f"Attempt {attempt_counter + 1} to reconnect...")
-                
-                disable()
-                time.sleep(1)  # Wait before enabling again
-                enable()
-                time.sleep(5)  # Give the system time to reconnect
+        if ping_result != 0:
+            print("Network unreachable")
+            logging.warning("Ping failed. Internet not reachable.")
 
-                # Check again if internet is reachable
-                response = subprocess.call(f"ping -n 1 {PING_HOST}", shell=True)
-                if response == 0:
-                    print("Reconnection successful!")
-                    logging.info("Reconnection successful!")
+            retries = 0
+            max_retries = 3
+
+            while retries < max_retries:
+                print(f"Retry attempt {retries + 1}")
+                logging.info(f"Retrying connection: attempt {retries + 1}")
+
+                turn_off_wifi()
+                time.sleep(2)
+                turn_on_wifi()
+                time.sleep(5)
+
+                retry_ping = subprocess.call(f"ping -n 1 {TEST_DOMAIN}", shell=True)
+                if retry_ping == 0:
+                    print("Reconnected successfully")
+                    logging.info("Internet reconnection successful")
                     break
                 else:
-                    print(f"Reconnection attempt {attempt_counter + 1} failed.")
-                    logging.warning(f"Reconnection attempt {attempt_counter + 1} failed.")
-                
-                attempt_counter += 1
+                    print("Retry failed")
+                    logging.warning(f"Attempt {retries + 1} failed to restore connection")
 
-            # Log failure if all attempts were unsuccessful
-            if attempt_counter == max_attempts and response != 0:
-                print(f"Failed to reconnect after {max_attempts} attempts.")
-                logging.error(f"Failed to reconnect after {max_attempts} attempts.")
-    except Exception as e:
-        # Catch and log any unexpected errors during the process
-        print(f"Error during WiFi check: {e}")
-        logging.error(f"Error during WiFi check: {e}")
+                retries += 1
 
-# Function to check if the script is running with administrator privileges
-def is_admin():
+            if retries == max_retries:
+                print("All reconnection attempts failed")
+                logging.error("Failed to reconnect after multiple tries")
+    except Exception as ex:
+        print(f"Unexpected error: {ex}")
+        logging.error(f"Monitor function error: {ex}")
+
+# Check for administrative privileges
+def has_admin_rights():
     try:
         return ctypes.windll.shell32.IsUserAnAdmin()
-    except Exception as e:
-        logging.error(f"Admin check failed: {e}")
+    except Exception as admin_err:
+        logging.error(f"Privilege check failed: {admin_err}")
         return False
 
-# Main execution
-if is_admin():
-    # Schedule the job to run every 50 seconds
-    sc.every(50).seconds.do(job)
+# Launch main routine
+if has_admin_rights():
+    scheduler.every(50).seconds.do(monitor_network)
 else:
-    # Relaunch the script with admin privileges if not already
     ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, 1)
 
-# Keep running the scheduler loop
+# Keep running the scheduled checks
 while True:
-    sc.run_pending()
+    scheduler.run_pending()
     time.sleep(1)
